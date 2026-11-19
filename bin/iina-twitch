@@ -9,8 +9,12 @@
 # Waarom live.lua via IPC: IINA geeft --mpv-script pas door als mpv al draait, en dan laadt mpv
 #   geen scripts meer. Het IPC-commando load-script werkt wel.
 # Geen --mpv-force-seekable: dan springt mpv alleen binnen zijn eigen buffer, nooit terug in de pipe.
+# Waarom video-sync=display-resample: IINA timet beelden standaard op het geluid. Op een 60Hz-scherm
+#   (60,0024 Hz) komen 60fps-beelden dan net niet gelijkmatig binnen: schokkerig zonder dat er
+#   beelden wegvallen. Met display-resample volgt mpv het scherm. Per Mac terug te zetten met
+#   video-sync=audio in ~/.config/twitch-iina/config (of TWITCH_IINA_VIDEO_SYNC).
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 case "${1:-}" in
   --version)
@@ -66,7 +70,24 @@ else
   echo "iina-twitch: $LUA ontbreekt; speelt af zonder automatisch terug naar live." >&2
 fi
 
+# Instelling per Mac. Het bestand wordt alleen gelezen, niet uitgevoerd.
+VIDEO_SYNC="${TWITCH_IINA_VIDEO_SYNC:-}"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/twitch-iina/config"
+if [ -z "$VIDEO_SYNC" ] && [ -f "$CONFIG" ]; then
+  VIDEO_SYNC="$(sed -n 's/^[[:space:]]*video-sync[[:space:]]*=[[:space:]]*\([a-z-]*\).*/\1/p' "$CONFIG" | tail -n 1)"
+fi
+case "$VIDEO_SYNC" in
+  audio | display-resample | display-resample-vdrop | display-resample-desync | display-tempo | \
+    display-vdrop | display-adrop | display-desync | desync) ;;
+  "") VIDEO_SYNC="display-resample" ;;
+  *)
+    echo "iina-twitch: onbekende video-sync '$VIDEO_SYNC'; gebruik display-resample." >&2
+    VIDEO_SYNC="display-resample"
+    ;;
+esac
+
 set -- \
+  --mpv-video-sync="$VIDEO_SYNC" \
   --mpv-cache=yes \
   --mpv-demuxer-max-bytes=200MiB \
   --mpv-demuxer-max-back-bytes=50MiB \

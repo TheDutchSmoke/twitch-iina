@@ -6,7 +6,7 @@
 
 emulate -L zsh
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 DIR="$HOME/Library/Application Support/streamlink"
 CFG="$DIR/config.twitch"
 VALIDATE="${TWITCH_VALIDATE_URL:-https://id.twitch.tv/oauth2/validate}"

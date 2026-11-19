@@ -51,6 +51,21 @@ Krijg je weer maximaal 1080p, dan is de login verlopen: voer `twitch-2k-login` o
 - IINA geeft `--mpv-script` pas door als mpv al draait; daarom laadt `iina-twitch` het script via
   mpv's IPC-socket (`/tmp/iina-twitch-<pid>.sock`).
 - Landen op 3 seconden vóór live: Twitch levert blokken van 2 seconden. Met minder buffer loopt hij leeg.
+- `video-sync=display-resample`: IINA timet beelden standaard op het geluid. Op een 60Hz-scherm komen
+  60fps-beelden dan net niet gelijkmatig binnen. Dat oogt schokkerig, al vallen er geen beelden weg.
+  Met display-resample volgt mpv het scherm.
+
+## Instelling per Mac
+
+Standaard staat `video-sync=display-resample` aan. Terug naar het gedrag van IINA zelf, alleen op deze Mac:
+
+```sh
+mkdir -p ~/.config/twitch-iina
+echo 'video-sync=audio' > ~/.config/twitch-iina/config
+```
+
+Weer standaard: verwijder die regel. `TWITCH_IINA_VIDEO_SYNC` gaat voor het bestand, maar de GUI geeft
+je shell-variabelen niet door, dus gebruik bij de GUI het bestand.
 
 ## Zonder IINA: mpv
 
