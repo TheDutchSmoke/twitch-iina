@@ -1,0 +1,92 @@
+#!/bin/sh
+# iina-twitch: speler voor Streamlink Twitch GUI (of `streamlink --player iina-twitch`).
+# Zet de stream om naar MPEG-TS, start IINA met de cache aan en laadt live.lua
+# ("automatisch terug naar live") via mpv's IPC-socket.
+#
+# Waarom de omzetting: 2K in H.265 komt van Twitch als fMP4, en de ffmpeg in IINA 1.5.1 (9.0.1)
+#   stopt daarop na een paar seconden ("trun sample count ... exceeds"). ffmpeg kopieert de
+#   stream alleen naar MPEG-TS: geen hercodering, ongeveer 0,3% van één CPU-kern.
+# Waarom live.lua via IPC: IINA geeft --mpv-script pas door als mpv al draait, en dan laadt mpv
+#   geen scripts meer. Het IPC-commando load-script werkt wel.
+# Geen --mpv-force-seekable: dan springt mpv alleen binnen zijn eigen buffer, nooit terug in de pipe.
+
+VERSION="1.0.0"
+
+case "${1:-}" in
+  --version)
+    echo "iina-twitch $VERSION"
+    exit 0
+    ;;
+  --help | -h)
+    echo "iina-twitch $VERSION: Twitch-speler voor Streamlink (IINA + automatisch terug naar live)."
+    echo "Gebruik: stel dit bestand in als speler in Streamlink Twitch GUI; Streamlink stuurt de stream via stdin."
+    echo "Zie https://github.com/TheDutchSmoke/twitch-iina"
+    exit 0
+    ;;
+esac
+
+# live.lua staat in ../share/twitch-iina/, ook als dit script via een symlink (Homebrew) wordt gestart.
+SELF="$(/bin/realpath "$0" 2>/dev/null || echo "$0")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+LUA="${TWITCH_IINA_LUA:-$ROOT/share/twitch-iina/live.lua}"
+
+# De GUI start spelers met een kale PATH, dus de bekende plekken expliciet langs.
+FFMPEG=
+for f in "${TWITCH_IINA_FFMPEG:-}" /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg; do
+  if [ -n "$f" ] && [ -x "$f" ]; then FFMPEG="$f"; break; fi
+done
+IINA=
+for a in "${TWITCH_IINA_APP:-}" /Applications/IINA.app "$HOME/Applications/IINA.app"; do
+  if [ -n "$a" ] && [ -x "$a/Contents/MacOS/IINA" ]; then IINA="$a/Contents/MacOS/IINA"; break; fi
+done
+if [ -z "$IINA" ]; then
+  echo "iina-twitch: IINA niet gevonden; installeer het met: brew install --cask iina" >&2
+  exit 1
+fi
+
+SOCK="/tmp/iina-twitch-$$.sock"
+
+# Oude sockets van eerdere streams opruimen.
+find /tmp -maxdepth 1 -name 'iina-twitch-*.sock' -mmin +720 -delete 2>/dev/null
+rm -f "$SOCK"
+
+if [ -f "$LUA" ]; then
+  (
+    i=0
+    while [ "$i" -lt 100 ]; do
+      if [ -S "$SOCK" ]; then
+        printf '{"command":["load-script","%s"]}\n' "$LUA" | nc -U -w 1 "$SOCK"
+        exit 0
+      fi
+      i=$((i + 1))
+      sleep 0.2
+    done
+  ) </dev/null >/dev/null 2>&1 &
+else
+  echo "iina-twitch: $LUA ontbreekt; speelt af zonder automatisch terug naar live." >&2
+fi
+
+set -- \
+  --mpv-cache=yes \
+  --mpv-demuxer-max-bytes=200MiB \
+  --mpv-demuxer-max-back-bytes=50MiB \
+  --mpv-demuxer-seekable-cache=yes \
+  --mpv-input-ipc-server="$SOCK" \
+  -
+
+# De stream van Streamlink komt op stdin binnen; een achtergrondopdracht krijgt anders /dev/null.
+exec 3<&0
+if [ -n "$FFMPEG" ]; then
+  "$FFMPEG" -nostdin -hide_banner -loglevel error \
+    -i pipe:0 -map 0 -c copy -f mpegts pipe:1 <&3 |
+    "$IINA" "$@" &
+else
+  echo "iina-twitch: ffmpeg niet gevonden; 2K in H.265 stopt dan na een paar seconden (brew install ffmpeg)." >&2
+  "$IINA" "$@" <&3 &
+fi
+IINA_PID=$!
+exec 3<&-
+
+# Streamlink stopt de speler met SIGTERM (stream gesloten in de GUI): dan ook IINA sluiten.
+trap 'kill "$IINA_PID" 2>/dev/null' TERM INT HUP
+wait "$IINA_PID"

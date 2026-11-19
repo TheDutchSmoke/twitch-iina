@@ -1,0 +1,96 @@
+#!/bin/zsh -f
+# twitch-2k-login: zet je Twitch-login en de 2K-codecs in Streamlinks config.twitch.
+# Twitch geeft een Streamlink die niet is ingelogd alleen omgezette versies (max 1080p of minder);
+# met je login ook de bron, dus 2K. Streamlink Twitch GUI geeft zelf geen login door.
+# Het token komt alleen in dat bestand (rechten 600): niet op de opdrachtregel, niet in een log.
+
+emulate -L zsh
+
+VERSION="1.0.0"
+DIR="$HOME/Library/Application Support/streamlink"
+CFG="$DIR/config.twitch"
+VALIDATE="${TWITCH_VALIDATE_URL:-https://id.twitch.tv/oauth2/validate}"
+CODECS="twitch-supported-codecs=h264,h265,av1"
+
+usage() {
+  print -r -- "twitch-2k-login $VERSION: Twitch-login voor 2K in Streamlink (ook vanuit Streamlink Twitch GUI)."
+  print -r -- ""
+  print -r -- "  twitch-2k-login          token invoeren (verborgen) en opslaan in config.twitch"
+  print -r -- "  twitch-2k-login --check  opgeslagen login en codecs controleren"
+  print -r -- ""
+  print -r -- "Het token is de cookie 'auth-token' van twitch.tv. Ingelogd op twitch.tv, in de browserconsole:"
+  print -r -- "  copy(document.cookie.match(/auth-token=([^;]+)/)[1])"
+  print -r -- "Plak het daarna hier. Het token van de GUI zelf werkt niet (ander client-ID)."
+}
+
+# HTTP-status van Twitch voor dit token; de header gaat via stdin naar curl, niet via de opdrachtregel.
+token_status() {
+  print -r -- "Authorization: OAuth $1" |
+    /usr/bin/curl -s -o /dev/null -w '%{http_code}' -m 10 -H @- "$VALIDATE"
+}
+
+saved_token() {
+  [[ -r "$CFG" ]] || return 1
+  local line
+  line=$(grep -E '^[[:space:]]*(--)?twitch-api-header[[:space:]]*=[[:space:]]*Authorization=OAuth ' "$CFG" | tail -n 1)
+  [[ -n "$line" ]] || return 1
+  print -r -- "${line##* }"
+}
+
+check() {
+  local token code ok=0
+  if grep -q -E '^[[:space:]]*(--)?twitch-supported-codecs[[:space:]]*=.*h265' "$CFG" 2>/dev/null; then
+    print -r -- "Codecs: H.265 staat aan."
+  else
+    print -r -- "Codecs: H.265 staat niet aan in $CFG; kanalen met 2K in H.265 blijven op 1080p."
+    ok=1
+  fi
+  if ! token=$(saved_token); then
+    print -r -- "Login: geen twitch-api-header in $CFG. Voer twitch-2k-login uit."
+    return 1
+  fi
+  code=$(token_status "$token")
+  case "$code" in
+    200) print -r -- "Login: geldig." ;;
+    401) print -r -- "Login: verlopen of ongeldig. Voer twitch-2k-login opnieuw uit."; ok=1 ;;
+    *) print -r -- "Login: niet te controleren (Twitch gaf '$code')."; ok=1 ;;
+  esac
+  return $ok
+}
+
+save() {
+  local token code tmp
+  usage
+  print -r -- ""
+  read -rs "token?Twitch auth-token (je ziet niets tijdens het plakken): "
+  print -r -- ""
+  token=${token//[[:space:]]/}
+  if [[ ! "$token" =~ '^[A-Za-z0-9]{20,40}$' ]]; then
+    print -r -- "Dat lijkt geen auth-token (verwacht 20-40 letters en cijfers). Er is niets opgeslagen." >&2
+    return 1
+  fi
+  code=$(token_status "$token")
+  if [[ "$code" != 200 ]]; then
+    print -r -- "Twitch accepteert dit token niet (status '$code'). Er is niets opgeslagen." >&2
+    return 1
+  fi
+  mkdir -p "$DIR" || return 1
+  umask 077
+  tmp=$(mktemp "$DIR/.config.twitch.XXXXXX") || return 1
+  if [[ -f "$CFG" ]]; then
+    grep -v -E '^[[:space:]]*(--)?(twitch-supported-codecs|twitch-api-header)[[:space:]]*=' "$CFG" > "$tmp"
+  fi
+  print -r -- "$CODECS" >> "$tmp"
+  print -r -- "twitch-api-header=Authorization=OAuth $token" >> "$tmp"
+  chmod 600 "$tmp" && mv -f "$tmp" "$CFG" || { rm -f "$tmp"; return 1; }
+  unset token
+  print -r -- "Opgeslagen in $CFG. Controleren: streamlink twitch.tv/<2K-kanaal> toont dan 1440p60 (best)."
+}
+
+case "${1:-}" in
+  --version) print -r -- "twitch-2k-login $VERSION" ;;
+  --help | -h) usage ;;
+  --check) check ;;
+  "") save ;;
+  *) usage >&2; exit 2 ;;
+esac
